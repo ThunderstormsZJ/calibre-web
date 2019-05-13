@@ -51,7 +51,7 @@ class Updater(threading.Thread):
 
     def __init__(self):
         threading.Thread.__init__(self)
-        self.status = 0
+        self.status = -1
         self.updateIndex = None
 
     def get_current_version_info(self):
@@ -237,7 +237,7 @@ class Updater(threading.Thread):
         return False
 
     def _stable_version_info(self):
-        return {'version': '0.6.1'} # Current version
+        return {'version': '0.6.3 Beta'} # Current version
 
     def _nightly_available_updates(self, request_method):
         tz = datetime.timedelta(seconds=time.timezone if (time.localtime().tm_isdst == 0) else time.altzone)

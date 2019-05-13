@@ -22,13 +22,12 @@
 import db
 import ub
 from flask import current_app as app
-# import logging
 from tempfile import gettempdir
 import sys
+import io
 import os
 import re
 import unicodedata
-# from io import BytesIO
 import worker
 import time
 from flask import send_from_directory, make_response, redirect, abort
@@ -36,16 +35,13 @@ from flask_babel import gettext as _
 from flask_login import current_user
 from babel.dates import format_datetime
 from datetime import datetime
-# import threading
 import shutil
 import requests
-# import zipfile
 try:
     import gdriveutils as gd
 except ImportError:
     pass
 import web
-# import server
 import random
 import subprocess
 
@@ -54,6 +50,12 @@ try:
     use_unidecode = True
 except ImportError:
     use_unidecode = False
+
+try:
+    from PIL import Image
+    use_PIL = True
+except ImportError:
+    use_PIL = False
 
 # Global variables
 # updater_thread = None
@@ -128,7 +130,7 @@ def send_registration_mail(e_mail, user_name, default_password, resend=False):
     text += "Sincerely\r\n\r\n"
     text += "Your Calibre-Web team"
     global_WorkerThread.add_email(_(u'Get Started with Calibre-Web'),None, None, ub.get_mail_settings(),
-                                  e_mail, user_name, _(u"Registration e-mail for user: %(name)s", name=user_name), text)
+                                  e_mail, None, _(u"Registration e-mail for user: %(name)s", name=user_name), text)
     return
 
 def check_send_to_kindle(entry):
@@ -146,8 +148,8 @@ def check_send_to_kindle(entry):
                     bookformats.append({'format':'Pdf','convert':0,'text':_('Send %(format)s to Kindle',format='Pdf')})
                 if 'AZW' in ele.format:
                     bookformats.append({'format':'Azw','convert':0,'text':_('Send %(format)s to Kindle',format='Azw')})
-                if 'AZW3' in ele.format:
-                    bookformats.append({'format':'Azw3','convert':0,'text':_('Send %(format)s to Kindle',format='Azw3')})
+                '''if 'AZW3' in ele.format:
+                    bookformats.append({'format':'Azw3','convert':0,'text':_('Send %(format)s to Kindle',format='Azw3')})'''
         else:
             formats = list()
             for ele in iter(entry.data):
@@ -156,18 +158,16 @@ def check_send_to_kindle(entry):
                 bookformats.append({'format': 'Mobi','convert':0,'text':_('Send %(format)s to Kindle',format='Mobi')})
             if 'AZW' in formats:
                 bookformats.append({'format': 'Azw','convert':0,'text':_('Send %(format)s to Kindle',format='Azw')})
-            if 'AZW3' in formats:
-                bookformats.append({'format': 'Azw3','convert':0,'text':_('Send %(format)s to Kindle',format='Azw3')})
             if 'PDF' in formats:
                 bookformats.append({'format': 'Pdf','convert':0,'text':_('Send %(format)s to Kindle',format='Pdf')})
             if ub.config.config_ebookconverter >= 1:
                 if 'EPUB' in formats and not 'MOBI' in formats:
                     bookformats.append({'format': 'Mobi','convert':1,
                             'text':_('Convert %(orig)s to %(format)s and send to Kindle',orig='Epub',format='Mobi')})
-            if ub.config.config_ebookconverter == 2:
+            '''if ub.config.config_ebookconverter == 2:
                 if 'EPUB' in formats and not 'AZW3' in formats:
                     bookformats.append({'format': 'Azw3','convert':1,
-                            'text':_('Convert %(orig)s to %(format)s and send to Kindle',orig='Epub',format='Azw3')})
+                            'text':_('Convert %(orig)s to %(format)s and send to Kindle',orig='Epub',format='Azw3')})'''
         return bookformats
     else:
         app.logger.error(u'Cannot find book entry %d', entry.id)
@@ -177,7 +177,7 @@ def check_send_to_kindle(entry):
 # Check if a reader is existing for any of the book formats, if not, return empty list, otherwise return
 # list with supported formats
 def check_read_formats(entry):
-    EXTENSIONS_READER = {'TXT', 'PDF', 'EPUB', 'ZIP', 'CBZ', 'TAR', 'CBT', 'RAR', 'CBR'}
+    EXTENSIONS_READER = {'TXT', 'PDF', 'EPUB', 'CBZ', 'CBT', 'CBR'}
     bookformats = list()
     if len(entry.data):
         for ele in iter(entry.data):
@@ -235,7 +235,10 @@ def get_valid_filename(value, replace_whitespace=True):
     value = value[:128]
     if not value:
         raise ValueError("Filename cannot be empty")
-    return value
+    if sys.version_info.major == 3:
+        return value
+    else:
+        return value.decode('utf-8')
 
 
 def get_sorted_author(value):
@@ -324,11 +327,11 @@ def update_dir_structure_file(book_id, calibrepath, first_author):
     # Rename all files from old names to new names
     if authordir != new_authordir or titledir != new_titledir:
         try:
+            new_name = get_valid_filename(localbook.title) + ' - ' + get_valid_filename(new_authordir)
+            path_name = os.path.join(calibrepath, new_authordir, os.path.basename(path))
             for file_format in localbook.data:
-                path_name = os.path.join(calibrepath, new_authordir, os.path.basename(path))
-                new_name = get_valid_filename(localbook.title) + ' - ' + get_valid_filename(new_authordir)
                 os.renames(os.path.join(path_name, file_format.name + '.' + file_format.format.lower()),
-                           os.path.join(path_name,new_name + '.' + file_format.format.lower()))
+                           os.path.join(path_name, new_name + '.' + file_format.format.lower()))
                 file_format.name = new_name
         except OSError as ex:
             web.app.logger.error("Rename file in path " + path + " to " + new_name + ": " + str(ex))
@@ -341,6 +344,7 @@ def update_dir_structure_file(book_id, calibrepath, first_author):
 def update_dir_structure_gdrive(book_id, first_author):
     error = False
     book = db.session.query(db.Books).filter(db.Books.id == book_id).first()
+    path = book.path
 
     authordir = book.path.split('/')[0]
     if first_author:
@@ -348,40 +352,39 @@ def update_dir_structure_gdrive(book_id, first_author):
     else:
         new_authordir = get_valid_filename(book.authors[0].name)
     titledir = book.path.split('/')[1]
-    new_titledir = get_valid_filename(book.title) + " (" + str(book_id) + ")"
+    new_titledir = get_valid_filename(book.title) + u" (" + str(book_id) + u")"
 
     if titledir != new_titledir:
         gFile = gd.getFileFromEbooksFolder(os.path.dirname(book.path), titledir)
         if gFile:
             gFile['title'] = new_titledir
-
             gFile.Upload()
-            book.path = book.path.split('/')[0] + '/' + new_titledir
+            book.path = book.path.split('/')[0] + u'/' + new_titledir
+            path = book.path
             gd.updateDatabaseOnEdit(gFile['id'], book.path)     # only child folder affected
         else:
             error = _(u'File %(file)s not found on Google Drive', file=book.path) # file not found
 
     if authordir != new_authordir:
-        gFile = gd.getFileFromEbooksFolder(os.path.dirname(book.path), titledir)
+        gFile = gd.getFileFromEbooksFolder(os.path.dirname(book.path), new_titledir)
         if gFile:
-            gd.moveGdriveFolderRemote(gFile,new_authordir)
-            book.path = new_authordir + '/' + book.path.split('/')[1]
+            gd.moveGdriveFolderRemote(gFile, new_authordir)
+            book.path = new_authordir + u'/' + book.path.split('/')[1]
+            path = book.path
             gd.updateDatabaseOnEdit(gFile['id'], book.path)
         else:
             error = _(u'File %(file)s not found on Google Drive', file=authordir) # file not found
     # Rename all files from old names to new names
-    # ToDo: Rename also all bookfiles with new author name and new title name
-    '''
+
     if authordir != new_authordir or titledir != new_titledir:
-        for format in book.data:
-            # path_name = os.path.join(calibrepath, new_authordir, os.path.basename(path))
-            new_name = get_valid_filename(book.title) + ' - ' + get_valid_filename(book)
-            format.name = new_name
-            if gFile:
-                pass
-            else:
-                error = _(u'File %(file)s not found on Google Drive', file=format.name)  # file not found
-                break'''
+        new_name = get_valid_filename(book.title) + u' - ' + get_valid_filename(new_authordir)
+        for file_format in book.data:
+            gFile = gd.getFileFromEbooksFolder(path, file_format.name + u'.' + file_format.format.lower())
+            if not gFile:
+                error = _(u'File %(file)s not found on Google Drive', file=file_format.name)  # file not found
+                break
+            gd.moveGdriveFileRemote(gFile, new_name + u'.' + file_format.format.lower())
+            file_format.name = new_name
     return error
 
 
@@ -444,27 +447,71 @@ def get_book_cover(cover_path):
         return send_from_directory(os.path.join(ub.config.config_calibre_dir, cover_path), "cover.jpg")
 
 
-# saves book cover to gdrive or locally
-def save_cover(url, book_path):
+# saves book cover from url
+def save_cover_from_url(url, book_path):
     img = requests.get(url)
-    if img.headers.get('content-type') != 'image/jpeg':
-        web.app.logger.error("Cover is no jpg file, can't save")
-        return False
+    return save_cover(img, book_path)
+
+
+def save_cover_from_filestorage(filepath, saved_filename, img):
+    if hasattr(img,'_content'):
+        f = open(os.path.join(filepath, saved_filename), "wb")
+        f.write(img._content)
+        f.close()
+    else:
+        # check if file path exists, otherwise create it, copy file to calibre path and delete temp file
+        if not os.path.exists(filepath):
+            try:
+                os.makedirs(filepath)
+            except OSError:
+                web.app.logger.error(u"Failed to create path for cover")
+                return False
+        try:
+            img.save(os.path.join(filepath, saved_filename))
+        except OSError:
+            web.app.logger.error(u"Failed to store cover-file")
+            return False
+        except IOError:
+            web.app.logger.error(u"Cover-file is not a valid image file")
+            return False
+    return True
+
+
+# saves book cover to gdrive or locally
+def save_cover(img, book_path):
+    content_type = img.headers.get('content-type')
+
+    if use_PIL:
+        if content_type not in ('image/jpeg', 'image/png', 'image/webp'):
+            web.app.logger.error("Only jpg/jpeg/png/webp files are supported as coverfile")
+            return False
+        # convert to jpg because calibre only supports jpg
+        if content_type in ('image/png', 'image/webp'):
+            if hasattr(img,'stream'):
+                imgc = Image.open(img.stream)
+            else:
+                imgc = Image.open(io.BytesIO(img.content))
+            im = imgc.convert('RGB')
+            tmp_bytesio = io.BytesIO()
+            im.save(tmp_bytesio, format='JPEG')
+            img._content = tmp_bytesio.getvalue()
+    else:
+        if content_type not in ('image/jpeg'):
+            web.app.logger.error("Only jpg/jpeg files are supported as coverfile")
+            return False
 
     if ub.config.config_use_google_drive:
         tmpDir = gettempdir()
-        f = open(os.path.join(tmpDir, "uploaded_cover.jpg"), "wb")
-        f.write(img.content)
-        f.close()
-        gd.uploadFileToEbooksFolder(os.path.join(book_path, 'cover.jpg'), os.path.join(tmpDir, f.name))
-        web.app.logger.info("Cover is saved on Google Drive")
-        return True
+        if save_cover_from_filestorage(tmpDir, "uploaded_cover.jpg", img) is True:
+            gd.uploadFileToEbooksFolder(os.path.join(book_path, 'cover.jpg'),
+                                        os.path.join(tmpDir, "uploaded_cover.jpg"))
+            web.app.logger.info("Cover is saved on Google Drive")
+            return True
+        else:
+            return False
+    else:
+        return save_cover_from_filestorage(os.path.join(ub.config.config_calibre_dir, book_path), "cover.jpg", img)
 
-    f = open(os.path.join(ub.config.config_calibre_dir, book_path, "cover.jpg"), "wb")
-    f.write(img.content)
-    f.close()
-    web.app.logger.info("Cover is saved")
-    return True
 
 
 def do_download_file(book, book_format, data, headers):
@@ -486,7 +533,6 @@ def do_download_file(book, book_format, data, headers):
         return response
 
 ##################################
-
 
 
 
@@ -522,17 +568,13 @@ def json_serial(obj):
         return obj.isoformat()
     raise TypeError ("Type %s not serializable" % type(obj))
 
-
+# helper function to apply localize status information in tasklist entries
 def render_task_status(tasklist):
-    #helper function to apply localize status information in tasklist entries
     renderedtasklist=list()
-    # task2 = task
     for task in tasklist:
         if task['user'] == current_user.nickname or current_user.role_admin():
-            # task2 = copy.deepcopy(task) # = task
             if task['formStarttime']:
                 task['starttime'] = format_datetime(task['formStarttime'], format='short', locale=web.get_locale())
-            # task2['formStarttime'] = ""
             else:
                 if 'starttime' not in task:
                     task['starttime'] = ""

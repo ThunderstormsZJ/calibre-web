@@ -61,7 +61,12 @@ MATURE_CONTENT = 2048
 SIDEBAR_PUBLISHER = 4096
 
 DEFAULT_PASS = "admin123"
-DEFAULT_PORT = int(os.environ.get("CALIBRE_PORT", 8083))
+try:
+    DEFAULT_PORT = int(os.environ.get("CALIBRE_PORT", 8083))
+except ValueError:
+    print ('Environmentvariable CALIBRE_PORT is set to an invalid value: ' +
+           os.environ.get("CALIBRE_PORT", 8083) + ', faling back to default (8083)')
+    DEFAULT_PORT = 8083
 
 UPDATE_STABLE = 0
 AUTO_UPDATE_STABLE = 1
@@ -206,6 +211,7 @@ class Anonymous(AnonymousUserMixin, UserBase):
         self.locale = data.locale
         self.mature_content = data.mature_content
         self.anon_browse = settings.config_anonbrowse
+        self.kindle_mail = data.kindle_mail
 
     def role_admin(self):
         return False
@@ -310,6 +316,7 @@ class Settings(Base):
     config_calibre_web_title = Column(String, default=u'Calibre-Web')
     config_books_per_page = Column(Integer, default=60)
     config_random_books = Column(Integer, default=4)
+    config_authors_max = Column(Integer, default=0)
     config_read_column = Column(Integer, default=0)
     config_title_regex = Column(String, default=u'^(A|The|An|Der|Die|Das|Den|Ein|Eine|Einen|Dem|Des|Einem|Eines)\s+')
     config_log_level = Column(SmallInteger, default=logging.INFO)
@@ -375,6 +382,7 @@ class Config:
         self.config_calibre_web_title = data.config_calibre_web_title
         self.config_books_per_page = data.config_books_per_page
         self.config_random_books = data.config_random_books
+        self.config_authors_max = data.config_authors_max
         self.config_title_regex = data.config_title_regex
         self.config_read_column = data.config_read_column
         self.config_log_level = data.config_log_level
@@ -561,6 +569,8 @@ class Config:
 # everywhere to curent should work. Migration is done by checking if relevant coloums are existing, and than adding
 # rows with SQL commands
 def migrate_Database():
+    if not engine.dialect.has_table(engine.connect(), "book_read_link"):
+        ReadBook.__table__.create(bind=engine)
     if not engine.dialect.has_table(engine.connect(), "bookmark"):
         Bookmark.__table__.create(bind=engine)
     if not engine.dialect.has_table(engine.connect(), "registration"):
@@ -593,6 +603,12 @@ def migrate_Database():
     except exc.OperationalError:  # Database is not compatible, some rows are missing
         conn = engine.connect()
         conn.execute("ALTER TABLE Settings ADD column `config_default_role` SmallInteger DEFAULT 0")
+        session.commit()
+    try:
+        session.query(exists().where(Settings.config_authors_max)).scalar()
+    except exc.OperationalError:  # Database is not compatible, some rows are missing
+        conn = engine.connect()
+        conn.execute("ALTER TABLE Settings ADD column `config_authors_max` INTEGER DEFAULT 0")
         session.commit()
     try:
         session.query(exists().where(BookShelf.order)).scalar()

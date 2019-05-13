@@ -27,15 +27,15 @@ $(function() {
             async: true,
             timeout: 900,
             success:function(data){
-                $('#domain-table').bootstrapTable("load", data);
+                $("#domain-table").bootstrapTable("load", data);
             }
         });
     });
     $("#domain-table").bootstrapTable({
         formatNoMatches: function () {
             return "";
-            },
-            striped: false
+        },
+        striped: false
     });
     $("#btndeletedomain").click(function() {
         //get data-id attribute of the clicked element
@@ -51,7 +51,7 @@ $(function() {
             url: window.location.pathname + "/../../ajax/domainlist",
             async: true,
             timeout: 900,
-            success:function(data){
+            success:function(data) {
                 $("#domain-table").bootstrapTable("load", data);
             }
         });
@@ -65,6 +65,7 @@ $(function() {
     });
 });
 
+/* Function for deleting domain restrictions */
 function TableActions (value, row, index) {
     return [
         "<a class=\"danger remove\" data-toggle=\"modal\" data-target=\"#DeleteDomain\" data-domain-id=\"" + row.id

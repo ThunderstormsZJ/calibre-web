@@ -62,6 +62,13 @@ except ImportError as e:
     logger.warning('cannot import fb2, extracting fb2 metadata will not work: %s', e)
     use_fb2_meta = False
 
+try:
+    from PIL import Image
+    from PIL import __version__ as PILversion
+    use_PIL = True
+except ImportError:
+    use_PIL = False
+
 
 def process(tmp_file_path, original_file_name, original_file_extension):
     meta = None
@@ -101,7 +108,7 @@ def default_meta(tmp_file_path, original_file_name, original_file_extension):
 def pdf_meta(tmp_file_path, original_file_name, original_file_extension):
 
     if use_pdf_meta:
-        pdf = PdfFileReader(open(tmp_file_path, 'rb'))
+        pdf = PdfFileReader(open(tmp_file_path, 'rb'), strict=False)
         doc_info = pdf.getDocumentInfo()
     else:
         doc_info = None
@@ -131,6 +138,46 @@ def pdf_preview(tmp_file_path, tmp_dir):
     if use_generic_pdf_cover:
         return None
     else:
+        if use_PIL:
+            try:
+                input1 = PdfFileReader(open(tmp_file_path, 'rb'), strict=False)
+                page0 = input1.getPage(0)
+                xObject = page0['/Resources']['/XObject'].getObject()
+
+                for obj in xObject:
+                    if xObject[obj]['/Subtype'] == '/Image':
+                        size = (xObject[obj]['/Width'], xObject[obj]['/Height'])
+                        data = xObject[obj]._data # xObject[obj].getData()
+                        if xObject[obj]['/ColorSpace'] == '/DeviceRGB':
+                            mode = "RGB"
+                        else:
+                            mode = "P"
+                        if '/Filter' in xObject[obj]:
+                            if xObject[obj]['/Filter'] == '/FlateDecode':
+                                img = Image.frombytes(mode, size, data)
+                                cover_file_name = os.path.splitext(tmp_file_path)[0] + ".cover.png"
+                                img.save(filename=os.path.join(tmp_dir, cover_file_name))
+                                return cover_file_name
+                                # img.save(obj[1:] + ".png")
+                            elif xObject[obj]['/Filter'] == '/DCTDecode':
+                                cover_file_name = os.path.splitext(tmp_file_path)[0] + ".cover.jpg"
+                                img = open(cover_file_name, "wb")
+                                img.write(data)
+                                img.close()
+                                return cover_file_name
+                            elif xObject[obj]['/Filter'] == '/JPXDecode':
+                                cover_file_name = os.path.splitext(tmp_file_path)[0] + ".cover.jp2"
+                                img = open(cover_file_name, "wb")
+                                img.write(data)
+                                img.close()
+                                return cover_file_name
+                        else:
+                            img = Image.frombytes(mode, size, data)
+                            cover_file_name = os.path.splitext(tmp_file_path)[0] + ".cover.png"
+                            img.save(filename=os.path.join(tmp_dir, cover_file_name))
+                            return cover_file_name
+            except Exception as ex:
+                print(ex)
         try:
             cover_file_name = os.path.splitext(tmp_file_path)[0] + ".cover.jpg"
             with Image(filename=tmp_file_path + "[0]", resolution=150) as img:
@@ -159,4 +206,12 @@ def get_versions():
         XVersion = 'v'+'.'.join(map(str, lxmlversion))
     else:
         XVersion = _(u'not installed')
-    return {'Image Magick': IVersion, 'PyPdf': PVersion, 'lxml':XVersion, 'Wand Version': WVersion}
+    if use_PIL:
+        PILVersion = 'v' + PILversion
+    else:
+        PILVersion = _(u'not installed')
+    return {'Image Magick': IVersion,
+            'PyPdf': PVersion,
+            'lxml':XVersion,
+            'Wand': WVersion,
+            'Pillow': PILVersion}
